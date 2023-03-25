@@ -1,0 +1,115 @@
+#!/bin/bash
+
+Data_Insertion()
+{
+	if grep -w -q ^$2 $1
+	then
+	    echo "It already exists and does not need to be added"
+	else
+	    echo $2 >> $1
+	fi
+}
+
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root (use sudo)" 1>&2
+   exit 1
+fi
+
+is_Raspberry=$(cat /proc/device-tree/model | awk  '{print $1}')
+if [ "x${is_Raspberry}" != "xRaspberry" ] ; then
+  echo "Sorry, this drivers only works on raspberry pi"
+  exit 1
+fi
+
+ver="1.0"
+
+
+# we create a dir with this version to ensure that 'dkms remove' won't delete
+# the sources during kernel updates
+marker="0.0.0"
+
+#sudo apt update
+#sudo apt-get -y install raspberrypi-kernel-headers raspberrypi-kernel 
+#sudo apt-get -y install  dkms git i2c-tools libasound2-plugins
+
+# locate currently installed kernels (may be different to running kernel if
+# it's just been updated)
+kernels=$(ls /lib/modules | sed "s/^/-k /")
+uname_r=$(uname -r)
+
+function install_module {
+  src=$1
+  mod=$2
+
+  if [[ -d /var/lib/dkms/$mod/$ver/$marker ]]; then
+    rmdir /var/lib/dkms/$mod/$ver/$marker
+  fi
+
+  if [[ -e /usr/src/$mod-$ver || -e /var/lib/dkms/$mod/$ver ]]; then
+    dkms remove --force -m $mod -v $ver --all
+    rm -rf /usr/src/$mod-$ver
+  fi
+  mkdir -p /usr/src/$mod-$ver
+  cp -a $src/* /usr/src/$mod-$ver/
+  dkms add -m $mod -v $ver
+  dkms build $uname_r -m $mod -v $ver && dkms install --force $uname_r -m $mod -v $ver
+
+  mkdir -p /var/lib/dkms/$mod/$ver/$marker
+}
+
+install_module "./" "wm8960-soundcard"
+
+# install dtbos
+cp wm8960-soundcard.dtbo /boot/overlays
+
+
+#set kernel moduels
+grep -q "i2c-dev" /etc/modules || \
+  echo "i2c-dev" >> /etc/modules  
+grep -q "snd-soc-wm8960" /etc/modules || \
+  echo "snd-soc-wm8960" >> /etc/modules  
+grep -q "snd-soc-wm8960-soundcard" /etc/modules || \
+  echo "snd-soc-wm8960-soundcard" >> /etc/modules  
+  
+#set dtoverlays
+sed -i -e 's:#dtparam=i2c_arm=on:dtparam=i2c_arm=on:g'  /boot/config.txt || true
+grep -q "dtoverlay=i2s-mmap" /boot/config.txt || \
+  echo "dtoverlay=i2s-mmap" >> /boot/config.txt
+
+grep -q "dtparam=i2s=on" /boot/config.txt || \
+  echo "dtparam=i2s=on" >> /boot/config.txt
+
+Data_Insertion /boot/config.txt  "ignore_lcd=1"
+Data_Insertion /boot/config.txt  "dtoverlay=JMO_DSI1024x600_Screen,Backlight=255"
+Data_Insertion /boot/config.txt  "dtparam=i2c_arm=on"
+Data_Insertion /boot/config.txt  "dtoverlay=JMO_DSI1024x600_Touch"
+Data_Insertion /boot/config.txt  "dtparam=i2c_vc=on"
+Data_Insertion /boot/config.txt  "dtoverlay=i2c-rtc,pcf8563,i2c0"
+Data_Insertion /boot/config.txt  "dtoverlay=wm8960-soundcard"
+#grep -q "dtoverlay=wm8960-soundcard" /boot/config.txt || \
+#  echo "dtoverlay=wm8960-soundcard" >> /boot/config.txt
+cp *.dtbo /boot/overlays/
+  
+#install config files
+mkdir /etc/wm8960-soundcard || true
+cp *.conf /etc/wm8960-soundcard
+cp *.state /etc/wm8960-soundcard
+
+#set service 
+cp wm8960-soundcard /usr/bin/
+cp wm8960-soundcard.service /lib/systemd/system/
+
+echo "make quectel-CM..."
+cd quectel-CM
+make
+cp quectel-CM /usr/bin/
+cp quectel-CM.service /lib/systemd/system/
+
+systemctl enable  wm8960-soundcard.service 
+systemctl start wm8960-soundcard                                
+systemctl enable  quectel-CM.service 
+systemctl start quectel-CM
+echo "------------------------------------------------------"
+echo "Please reboot your raspberry pi to apply all settings"
+echo "Enjoy!"
+echo "------------------------------------------------------"

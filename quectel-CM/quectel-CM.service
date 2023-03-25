@@ -1,0 +1,12 @@
+[Unit]
+Description=quectel CM service
+#After=alsa-restore.service
+ 
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/quectel-CM
+User=root
+ 
+[Install]
+WantedBy=sysinit.target
